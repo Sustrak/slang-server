@@ -2,39 +2,55 @@
 
 import * as child_process from 'child_process'
 import * as vscode from 'vscode'
-import { ConfigObject, ExtensionComponent } from './lib/libconfig'
 import { getWorkspaceFolder } from './utils'
+import { ConfigObject, ExtensionComponent } from './lib/libconfig'
 
-export class ExternalFormatter
-  extends ExtensionComponent
-  implements vscode.DocumentFormattingEditProvider
-{
+export class DeprecatedExternalFormatter extends ExtensionComponent {
+  /// Here temporarily for backward compatibility
   command: ConfigObject<string> = new ConfigObject({
     description:
       'Formatter Command. The file contents will be sent to stdin, and formatted code should be sent back on stdout. E.g. `path/to/verible-format --indentation_spaces=4 -',
     default: '',
+    deprecationMessage: 'Use "verilog.formatters" instead.',
     type: 'string',
   })
+}
+
+export class ExternalFormatter implements vscode.DocumentFormattingEditProvider {
+  private command: string
+  provider: vscode.Disposable
+
+  constructor(command: string, formatDirs: string[], languageIds: string[]) {
+    this.command = command
+
+    let dirSel = undefined
+    if (formatDirs.length > 0) {
+      dirSel = formatDirs.length > 1 ? `{${formatDirs.join(',')}}` : formatDirs[0]
+    }
+
+    const selectors: vscode.DocumentSelector = languageIds.map((language) => ({
+      scheme: 'file',
+      language: language,
+      pattern: formatDirs.length > 0 ? `${getWorkspaceFolder()}/${dirSel}/**/*` : undefined,
+    }))
+
+    this.provider = vscode.languages.registerDocumentFormattingEditProvider(selectors, this)
+  }
 
   provideDocumentFormattingEdits(
     document: vscode.TextDocument,
     _options: vscode.FormattingOptions,
     _token: vscode.CancellationToken
   ): vscode.ProviderResult<vscode.TextEdit[]> {
-    this.logger.info(`formatting ${document.uri.fsPath}`)
-    let command: string = this.command.getValue()
-    if (command.length === 0) {
+    if (this.command.length === 0) {
       return
     }
-    const split = command.split(' ')
+    const split = this.command.split(' ')
     const binPath = split[0]
     const args = split.slice(1)
     if (binPath === undefined) {
-      this.logger.warn('No path specified for formatter')
       return []
     }
-
-    this.logger.info('Executing command: ' + binPath + ' ' + args.join(' '))
 
     try {
       const result = child_process.spawnSync(binPath, args, {
@@ -61,33 +77,9 @@ export class ExternalFormatter
         ),
       ]
     } catch (err) {
-      this.logger.error('Formatting failed: ' + (err as Error).toString())
+      vscode.window.showErrorMessage('Formatting failed: ' + (err as Error).toString())
     }
 
     return []
-  }
-
-  provider: vscode.Disposable | undefined
-
-  activateFormatter(formatDirs: string[], exts: string[], language: string): void {
-    if (this.provider !== undefined) {
-      this.provider.dispose()
-    }
-
-    let dirSel = undefined
-    if (formatDirs.length > 0) {
-      dirSel = formatDirs.length > 1 ? `{${formatDirs.join(',')}}` : formatDirs[0]
-    }
-
-    const sel: vscode.DocumentSelector = {
-      scheme: 'file',
-      language: language,
-      pattern:
-        formatDirs.length > 0
-          ? `${getWorkspaceFolder()}/${dirSel}/**/*.{${exts.join(',')}}`
-          : undefined,
-    }
-
-    this.provider = vscode.languages.registerDocumentFormattingEditProvider(sel, this)
   }
 }
